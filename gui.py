@@ -1,8 +1,17 @@
-# gui.py 【100% 原版完整还原 + 增强功能】
+# gui.py
+import sys
+import os
+
+# PyInstaller --windowed 模式下 stdout/stderr 为 None，任何 print/write 都会崩溃
+# 必须在所有其他 import 之前重定向
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import threading
-import os
 import subprocess
 import json
 from PIL import Image, ImageTk
@@ -17,7 +26,6 @@ try:
     HAS_THUMBNAIL = True
 except ImportError:
     HAS_THUMBNAIL = False
-    print("警告: 视频缩略图功能不可用")
 
 class MediaDeduplicatorGUI:
     def __init__(self, root):
@@ -606,6 +614,8 @@ class MediaDeduplicatorGUI:
         self.update_stats("")
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     root = tk.Tk()
     app = MediaDeduplicatorGUI(root)
     root.mainloop()

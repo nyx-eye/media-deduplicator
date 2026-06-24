@@ -1,3 +1,8 @@
+# PyInstaller
+build/
+dist/
+*.spec
+
 # Python
 __pycache__/
 *.py[cod]
@@ -20,6 +25,3 @@ t/
 # OS
 .DS_Store
 Thumbs.db
-
-# Checkpoint (runtime data)
-checkpoint.db

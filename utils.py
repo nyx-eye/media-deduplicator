@@ -1,6 +1,15 @@
 # utils.py
 import os
+import sys
 import cv2
+
+
+def _safe_print(*args, **kwargs):
+    """PyInstaller --windowed 下 sys.stdout 为 None，print 会崩溃"""
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        pass
 
 def get_file_size_mb(path):
     try:
@@ -60,7 +69,7 @@ def get_video_metadata(video_path):
     except Exception:
         return None
 
-def log_info(s): print(f"[INFO] {s}")
-def log_warning(s): print(f"[WARN] {s}")
+def log_info(s): _safe_print(f"[INFO] {s}")
+def log_warning(s): _safe_print(f"[WARN] {s}")
 def log_debug(s): pass
-def log_success(s): print(f"[OK] {s}")
+def log_success(s): _safe_print(f"[OK] {s}")
