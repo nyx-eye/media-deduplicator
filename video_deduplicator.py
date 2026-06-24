@@ -72,9 +72,11 @@ def _process_single_video(args):
     video_path, gpu_engine = args
     try:
         # GPU 引擎检测已在主进程完成，这里直接调用对应路径
-        # 各引擎函数内部会自行打开/检查/关闭视频
+        # 三级回退：NVDEC → ffmpeg软件 → OpenCV
         if gpu_engine == "ffmpeg":
             hashes = _extract_with_ffmpeg(video_path)
+            if hashes is None:
+                hashes = _extract_with_cpu(video_path)
         else:
             hashes = _extract_with_cpu(video_path)
 
@@ -232,32 +234,38 @@ def _extract_with_ffmpeg(video_path):
     max_out = min(VIDEO_MAX_FRAMES * 3, 3000)
     frame_bytes = w * h * 3
 
-    # fps 滤镜天然跳帧：fps=60→12 等价于每5帧取1帧
-    target_fps = max(1, 60 // skip)
-    vf = f"fps={target_fps},scale={w}:{h},format=bgr24"
+    # 按帧序号跳帧，不依赖时间戳（兼容 VFR/损坏时间戳）
+    q = chr(39)
+    select_expr = f"select={q}not(mod(n,{skip})){q}"
 
+    # NVDEC 路径：hwdownload → select → scale → format
+    vf_nvdec = f"hwdownload,format=nv12,{select_expr},scale={w}:{h},format=bgr24"
+
+    # ── 主路径: NVDEC 硬件解码 ──
     tmpfile = None
     try:
-        # 写到临时文件（rawvideo 格式，零编码开销）
         fd, tmpfile = tempfile.mkstemp(suffix=".raw", prefix="vdedup_")
         os.close(fd)
 
         result = subprocess.run([
             "ffmpeg", "-y",
+            "-fflags", "+genpts+igndts",
+            "-err_detect", "ignore_err",
             "-hwaccel", "cuda",
             "-hwaccel_output_format", "cuda",
             "-i", video_path,
-            "-vf", vf,
-            "-vsync", "vfr",
+            "-vf", vf_nvdec,
+            "-vsync", "0",
             "-frames:v", str(max_out),
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
             tmpfile
         ], capture_output=True, timeout=300)
 
+        # NVDEC 失败 → 直接回退 OpenCV（不再试 Gyan 软件解码）
+        # 原因：NVDEC 和 Gyan ffmpeg 共用一个容器解析器，前者打不开后者也打不开
         if result.returncode != 0:
-            # NVDEC 失败时回退 CPU（此视频可能不兼容硬件解码）
-            return _extract_with_cpu(video_path)
+            return None
 
         # 读取 raw 数据 → numpy 帧序列
         raw = np.fromfile(tmpfile, dtype=np.uint8)
@@ -276,15 +284,13 @@ def _extract_with_ffmpeg(video_path):
         if len(frames) < 2:
             return None
 
-        # 用统一的三级场景检测（与 CPU 路径一致），保证不同路径产出的
-        # 关键帧兼容，避免 GPU/CPU 混合处理时漏检
         return _detect_scenes_unified(frames)
 
     except subprocess.TimeoutExpired:
         log_warning(f"ffmpeg 超时: {video_path}，回退 CPU")
         return _extract_with_cpu(video_path)
     except Exception as e:
-        log_warning(f"ffmpeg GPU 失败: {video_path} ({e})，回退 CPU")
+        log_warning(f"ffmpeg 失败: {video_path} ({e})，回退 CPU")
         return _extract_with_cpu(video_path)
     finally:
         if tmpfile and os.path.exists(tmpfile):
@@ -495,7 +501,8 @@ class VideoDeduplicator:
     - 模糊"完全相同"判定
     """
 
-    def __init__(self, max_workers=4, stop_event=None, progress_callback=None):
+    def __init__(self, max_workers=4, stop_event=None, progress_callback=None,
+                 found_callback=None):
         self.max_workers = max_workers
         self.video_keyframe_hashes = {}
         self.video_metadata = {}
@@ -503,6 +510,7 @@ class VideoDeduplicator:
         self.fail_callback = None
         self.stop_event = stop_event
         self.progress_callback = progress_callback
+        self.found_callback = found_callback
         self._executor = None
         self._checkpoint = None
 
@@ -534,12 +542,30 @@ class VideoDeduplicator:
         if not video_files:
             return
 
-        gpu_label = f"GPU({self.gpu_engine})" if self.gpu_engine else "CPU"
-        log_info(f"正在提取关键帧 [{gpu_label}]: {len(video_files)} 个视频")
+        # 过滤已 checkpoint 的视频（断点续跑）
+        if self._checkpoint:
+            done = self._checkpoint.get_processed_video_paths()
+            pending = [v for v in video_files if v not in done]
+            if len(pending) < len(video_files):
+                log_info(f"Checkpoint: {len(done)} 视频已处理, {len(pending)} 待处理")
+        else:
+            pending = video_files
 
-        tasks = [(path, self.gpu_engine) for path in video_files]
+        if not pending:
+            return
+
+        gpu_label = f"GPU({self.gpu_engine})" if self.gpu_engine else "CPU"
+        log_info(f"正在提取关键帧 [{gpu_label}]: {len(pending)} 个视频")
+
+        # 恢复已 checkpoint 的数据
+        already_done = len(video_files) - len(pending)
+        if already_done > 0:
+            self.load_checkpoint()
+
+        tasks = [(path, self.gpu_engine) for path in pending]
         completed = 0
-        total = len(video_files)
+        total = len(pending)
+        global_total = len(video_files)
 
         self._executor = ProcessPoolExecutor(max_workers=self.max_workers)
         try:
@@ -580,16 +606,18 @@ class VideoDeduplicator:
 
                 completed += 1
                 if self.progress_callback:
-                    self.progress_callback("videos_extract", completed, total)
+                    self.progress_callback("videos_extract",
+                                           already_done + completed, global_total)
                 if self._checkpoint:
-                    self._checkpoint.save_progress("videos", completed, total)
+                    self._checkpoint.save_progress("videos",
+                                                   already_done + completed, global_total)
 
         finally:
             if self._executor is not None:
                 self._executor.shutdown(wait=False)
                 self._executor = None
 
-        log_info(f"关键帧提取完成: {len(self.video_keyframe_hashes)}/{len(video_files)} 成功")
+        log_info(f"关键帧提取完成: {len(self.video_keyframe_hashes)}/{global_total} 成功")
 
     # ═══ checkpoint 恢复 ═══
 
@@ -701,6 +729,13 @@ class VideoDeduplicator:
             if self._checkpoint:
                 gid = len(self.duplicate_groups)
                 self._checkpoint.save_duplicate_group(gid, group)
+
+        # 视频匹配完成，回调通知 GUI
+        if self.found_callback:
+            video_groups = sum(1 for g in self.duplicate_groups
+                               if g["type"] in ("video", "video_edited"))
+            if video_groups > 0:
+                self.found_callback("videos", video_groups)
 
     # ═══ 主流程 ═══
 

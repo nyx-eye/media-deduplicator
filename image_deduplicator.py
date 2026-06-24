@@ -35,15 +35,18 @@ def _hash_single_image(image_path):
 
 
 class ImageDeduplicator:
-    def __init__(self, max_workers=4, stop_event=None, progress_callback=None):
+    def __init__(self, max_workers=4, stop_event=None, progress_callback=None,
+                 found_callback=None):
         self.max_workers = max_workers
-        self.image_hashes = defaultdict(list)    # hash_str → [paths]
-        self.file_to_hash = {}                    # path → hash_str
+        self.image_hashes = defaultdict(list)
+        self.file_to_hash = {}
         self.duplicate_groups = []
         self.fail_callback = None
         self.stop_event = stop_event or threading.Event()
         self.progress_callback = progress_callback
+        self.found_callback = found_callback
         self._checkpoint = None
+        self._last_reported_count = 0
 
     def set_fail_callback(self, cb):
         self.fail_callback = cb
@@ -145,6 +148,14 @@ class ImageDeduplicator:
                     self._checkpoint.save_image_hashes_batch(batch)
                     self._checkpoint.save_progress("images", completed, total)
                     batch.clear()
+
+                # 每 200 张检查新重复组
+                if self.found_callback and completed % 200 == 0:
+                    new_count = sum(1 for fs in self.image_hashes.values()
+                                    if len(fs) > 1)
+                    if new_count > self._last_reported_count:
+                        self._last_reported_count = new_count
+                        self.found_callback("images", new_count)
 
                 if self.progress_callback and completed % 20 == 0:
                     self.progress_callback("images", completed, total)

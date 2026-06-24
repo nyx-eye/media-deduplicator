@@ -24,6 +24,10 @@ class Checkpoint:
 
     def _create_tables(self):
         self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
             CREATE TABLE IF NOT EXISTS progress (
                 phase      TEXT PRIMARY KEY,
                 completed  INTEGER DEFAULT 0,
@@ -71,6 +75,29 @@ class Checkpoint:
     def is_phase_done(self, phase):
         completed, total = self.load_progress(phase)
         return completed >= total and total > 0
+
+    def set_folder(self, folder_path):
+        """记录当前扫描的文件夹路径"""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('folder', ?)", (folder_path,)
+        )
+        self.conn.commit()
+
+    def get_folder(self):
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key='folder'"
+        ).fetchone()
+        return row[0] if row else None
+
+    def ensure_folder_match(self, folder_path):
+        """检查文件夹是否匹配，不匹配则清空旧数据"""
+        old = self.get_folder()
+        if old and old != folder_path:
+            self.cleanup()
+            self.set_folder(folder_path)
+            return False
+        self.set_folder(folder_path)
+        return True
 
     def reset_phase(self, phase):
         """重置某个阶段（文件变化时重新处理）"""
