@@ -30,7 +30,7 @@ except ImportError:
 class MediaDeduplicatorGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Media Deduplicator - 增强版")
+        self.root.title("Media Deduplicator v1.1")
         self.root.geometry("1500x950")
         self.root.configure(bg='#f0f0f0')
         
@@ -50,7 +50,7 @@ class MediaDeduplicatorGUI:
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
         
-        tk.Label(title_frame, text="Media Deduplicator 1.0 - 图片视频去重工具", 
+        tk.Label(title_frame, text="Media Deduplicator v1.1", 
                 font=("微软雅黑", 14, "bold"), 
                 bg='#2196F3', fg='white').pack(pady=12)
         
@@ -128,7 +128,7 @@ class MediaDeduplicatorGUI:
                                        padx=10, pady=4, cursor="hand2", state='disabled')
         self.numbered_btn.pack(side=tk.LEFT, padx=3)
 
-        self.import_kf_btn = tk.Button(op_row, text="导入关键帧",
+        self.import_kf_btn = tk.Button(op_row, text="导入关键帧缓存",
                                         command=self._import_keyframes,
                                         bg='#455A64', fg='white', font=("微软雅黑", 9),
                                         padx=10, pady=4, cursor="hand2")
@@ -238,9 +238,14 @@ class MediaDeduplicatorGUI:
             scrollregion=self.canvas.bbox("all")))
         
         def on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.canvas.bind("<MouseWheel>", on_mousewheel)
-        
+            # 只在鼠标位于 canvas 区域内时滚轮才生效
+            x = self.canvas.winfo_rootx()
+            y = self.canvas.winfo_rooty()
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            if x <= event.x_root <= x + w and y <= event.y_root <= y + h:
+                self.canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.root.bind("<MouseWheel>", on_mousewheel)
         # 底部提示
         tip_frame = tk.Frame(self.root, bg='#fff9c4', pady=4)
         tip_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -684,7 +689,7 @@ class MediaDeduplicatorGUI:
         self.update_status(f"已复制路径: {os.path.basename(path)}")
         self.append_log(f"已复制路径: {os.path.basename(path)}")
 
-    def _mark_delete(self, file_path, old_frame, rebuild=True):
+    def _mark_delete(self, file_path, old_frame, rebuild=True, action=None):
         """标记删除：移动到 scan_root/delete/ 子目录，重命名为 原名(delete).后缀"""
         import shutil
         scan_root = self.folder_path.get()
@@ -708,6 +713,10 @@ class MediaDeduplicatorGUI:
             messagebox.showerror("标记删除失败", str(e))
             return
         self._update_trashed(file_path, target)
+        # 记录 auto_actions（移到成功后执行，避免假阳性）
+        if action:
+            g = self.groups[self.current_group_index]
+            g.setdefault("auto_actions", {}).setdefault(action, []).append(file_path)
         if old_frame:
             old_frame.destroy()
         if rebuild:
@@ -843,45 +852,39 @@ class MediaDeduplicatorGUI:
         self.collect_btn.config(state='disabled')
 
     def _import_keyframes(self):
-        """导入关键帧 JSON，重新匹配视频"""
-        import json as _json
+        """导入关键帧缓存：复制到 results/keyframes.json 供扫描时使用"""
+        import shutil
         json_path = filedialog.askopenfilename(
-            title="选择关键帧文件",
+            title="选择关键帧缓存文件",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
             initialdir="results"
         )
         if not json_path:
             return
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                kf_data = _json.load(f)
-            import imagehash
-            for path, info in kf_data.items():
-                hashes = []
-                for h_str in info["hashes"]:
-                    try:
-                        hashes.append(imagehash.hex_to_hash(h_str))
-                    except Exception:
-                        pass
-                if hashes:
-                    self._deduplicator.video_dedup.video_keyframe_hashes[path] = hashes
-                if info.get("meta"):
-                    self._deduplicator.video_dedup.video_metadata[path] = info["meta"]
-
-            vd = self._deduplicator.video_dedup
-            vd.duplicate_groups.clear()
-            vd.find_identical_videos()
-            vd.find_edited_reencoded_videos()
-            vd._merge_connected_groups()
-
-            self._deduplicator.all_duplicates = self._deduplicator.image_dedup.duplicate_groups + vd.duplicate_groups
-            self._deduplicator._sort_groups()
-            self.groups = self._deduplicator.all_duplicates
-            self.populate_list(self.groups)
-            self.update_status(f"关键帧导入完成: {len(kf_data)} 视频, {len(vd.duplicate_groups)} 组重复")
-            self.append_log(f"已导入关键帧: {len(kf_data)} 视频, 发现 {len(vd.duplicate_groups)} 组视频重复")
+            os.makedirs("results", exist_ok=True)
+            dest = os.path.join("results", "keyframes.json")
+            if os.path.abspath(json_path) != os.path.abspath(dest):
+                shutil.copy2(json_path, dest)
+            import json as _json
+            with open(dest, "r", encoding="utf-8") as f:
+                kf = _json.load(f)
+            self.update_status(f"已加载 {len(kf)} 个视频的关键帧缓存")
+            self.append_log(f"已加载关键帧缓存: {len(kf)} 个视频（将在扫描时跳过未变化的文件）")
+            self.import_kf_btn.config(text="取消导入", command=self._cancel_keyframes,
+                                       bg='#c62828', fg='white')
         except Exception as e:
             messagebox.showerror("导入失败", str(e))
+
+    def _cancel_keyframes(self):
+        """删除关键帧缓存，恢复按钮"""
+        cache_path = os.path.join("results", "keyframes.json")
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+        self.update_status("已取消关键帧缓存")
+        self.append_log("已取消关键帧缓存，扫描时将重新提取所有视频")
+        self.import_kf_btn.config(text="导入关键帧缓存", command=self._import_keyframes,
+                                   bg='#455A64', fg='white')
 
     def _find_group_index(self, file_path):
         """找到文件所属的重复组索引"""
@@ -891,16 +894,13 @@ class MediaDeduplicatorGUI:
         return None
 
     def _batch_mark(self, file_list, action=None):
-        """批量标记删除，记录 auto_actions，只刷新一次"""
+        """批量标记删除，只刷新一次"""
         saved_idx = self.current_group_index
         for fp in file_list:
             idx = self._find_group_index(fp)
             if idx is not None:
                 self.current_group_index = idx
-                self._mark_delete(fp, None, rebuild=False)
-                if action:
-                    g = self.groups[idx]
-                    g.setdefault("auto_actions", {}).setdefault(action, []).append(fp)
+                self._mark_delete(fp, None, rebuild=False, action=action)
         self.current_group_index = saved_idx
         self.populate_list(self.groups)
         self._rebuild_card()
@@ -909,6 +909,7 @@ class MediaDeduplicatorGUI:
     def _auto_keep_best(self):
         """保留最高清晰度：标记删除组内低清晰度的文件（跳过已执行的组）"""
         to_delete = []
+        to_delete_set = set()
         for g in self.groups:
             trashed = g.get("trashed", {})
             actions = g.get("auto_actions", {})
@@ -966,6 +967,7 @@ class MediaDeduplicatorGUI:
         """自动识别副本：图片名字带(数字)+视频时长/大小相同的"""
         import re
         to_delete = []
+        to_delete_set = set()
         numbered_pattern = re.compile(r"^(.*?)\s*\(\d+\)(\.[^.]+)$")
         from utils import get_video_metadata
 

@@ -427,12 +427,22 @@ class FastVideoMatcher:
         )
 
         # 3. 存疑对 → 滑动窗口精排
-        for v1, v2, _shared in slide_candidates:
+        for v1, v2, shared_count in slide_candidates:
             sw_score = self.sliding_window_similarity(
                 self.video_hashes[v1], self.video_hashes[v2]
             )
             if sw_score >= self.sim_threshold:
                 results.append((v1, v2, sw_score, self._reason(sw_score)))
+            elif shared_count >= 20:
+                # 精确共享帧足够多 + 时长接近 → 跨分辨率压缩的兜底判定
+                d1 = self.video_meta.get(v1, {}).get("duration", 0)
+                d2 = self.video_meta.get(v2, {}).get("duration", 0)
+                dur_ratio = min(d1, d2) / max(d1, d2) if max(d1, d2) > 0 else 0
+                if dur_ratio >= 0.8:
+                    est = shared_count / min(len(self.video_hashes.get(v1, [])),
+                                             len(self.video_hashes.get(v2, []))) * 100
+                    results.append((v1, v2, est,
+                                    "跨分辨率压缩（关键帧偏移较大）"))
 
         results.sort(key=lambda x: -x[2])
         log_info(f"匹配完成: {len(results)} 组重复视频")
@@ -537,28 +547,85 @@ class VideoDeduplicator:
 
     # ═══ 视频处理 ═══
 
+    # ═══ 关键帧缓存 ═══
+
+    def _load_keyframes_cache(self):
+        cache = {}
+        cache_path = os.path.join("results", "keyframes.json")
+        if os.path.exists(cache_path):
+            import json as _json
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cache = _json.load(f)
+            except Exception:
+                pass
+        return cache
+
+    def _save_keyframes_cache(self, cache):
+        import json as _json
+        cache_path = os.path.join("results", "keyframes.json")
+        os.makedirs("results", exist_ok=True)
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                _json.dump(cache, f, ensure_ascii=False)
+        except Exception:
+            pass
+
     def process_videos(self, video_files):
-        """并行处理所有视频，提取关键帧序列"""
+        """并行处理视频，优先从 keyframes.json 缓存恢复"""
         if not video_files:
             return
 
-        # 过滤已 checkpoint 的视频（断点续跑）
+        # ── 第1步：从 keyframes.json 缓存恢复 ──
+        import imagehash
+        cache = self._load_keyframes_cache()
+        cached_count = 0
+        to_extract = []
+
+        for path in video_files:
+            if path in cache:
+                c = cache[path]
+                try:
+                    st = os.stat(path)
+                    if st.st_mtime == c.get("mtime") and st.st_size == c.get("size"):
+                        hashes = []
+                        for h_str in c.get("hashes", []):
+                            try:
+                                hashes.append(imagehash.hex_to_hash(h_str))
+                            except Exception:
+                                pass
+                        if hashes:
+                            self.video_keyframe_hashes[path] = hashes
+                            if c.get("meta"):
+                                self.video_metadata[path] = c["meta"]
+                            cached_count += 1
+                            continue
+                except OSError:
+                    pass
+            to_extract.append(path)
+
+        if cached_count > 0:
+            log_info(f"关键帧缓存: {cached_count} 视频跳过（文件未变）, {len(to_extract)} 待提取")
+
+        # ── 第2步：过滤 checkpoint ──
         if self._checkpoint:
             done = self._checkpoint.get_processed_video_paths()
-            pending = [v for v in video_files if v not in done]
-            if len(pending) < len(video_files):
+            pending = [v for v in to_extract if v not in done]
+            if len(pending) < len(to_extract):
                 log_info(f"Checkpoint: {len(done)} 视频已处理, {len(pending)} 待处理")
         else:
-            pending = video_files
+            pending = to_extract
 
         if not pending:
+            # 恢复已缓存和 checkpoint 的数据后直接返回
+            if cached_count > 0 or (self._checkpoint and self._checkpoint.get_processed_video_paths()):
+                self.load_checkpoint()
             return
 
         gpu_label = f"GPU({self.gpu_engine})" if self.gpu_engine else "CPU"
         log_info(f"正在提取关键帧 [{gpu_label}]: {len(pending)} 个视频")
 
-        # 恢复已 checkpoint 的数据
-        already_done = len(video_files) - len(pending)
+        already_done = len(to_extract) - len(pending)
         if already_done > 0:
             self.load_checkpoint()
 
@@ -618,6 +685,21 @@ class VideoDeduplicator:
                 self._executor = None
 
         log_info(f"关键帧提取完成: {len(self.video_keyframe_hashes)}/{global_total} 成功")
+
+        # 更新关键帧缓存：新提取的视频加入 cache
+        for path in pending:
+            if path in self.video_keyframe_hashes:
+                try:
+                    st = os.stat(path)
+                    cache[path] = {
+                        "hashes": [str(h) for h in self.video_keyframe_hashes[path]],
+                        "meta": self.video_metadata.get(path, {}),
+                        "mtime": st.st_mtime,
+                        "size": st.st_size
+                    }
+                except OSError:
+                    pass
+        self._save_keyframes_cache(cache)
 
     # ═══ checkpoint 恢复 ═══
 

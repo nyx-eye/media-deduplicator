@@ -159,20 +159,7 @@ class HybridMediaDeduplicator:
                 pass
 
         # ── 阶段5: 报告 ──
-        # 导出关键帧 JSON（供后续导入重匹配）
-        if self.video_dedup.video_keyframe_hashes:
-            try:
-                kf = {}
-                for path, hashes in self.video_dedup.video_keyframe_hashes.items():
-                    kf[path] = {
-                        "hashes": [str(h) for h in hashes],
-                        "meta": self.video_dedup.video_metadata.get(path, {})
-                    }
-                keyframes_path = os.path.join("results", "keyframes.json")
-                with open(keyframes_path, "w", encoding="utf-8") as _f:
-                    _json.dump(kf, _f, ensure_ascii=False)
-            except Exception:
-                pass
+        # 导出关键帧 JSON（已在 process_videos 中保存，此处不再重复）
 
         if cp:
             cp.save_progress("report", 1, 1)
