@@ -122,11 +122,17 @@ class MediaDeduplicatorGUI:
                                    padx=10, pady=4, cursor="hand2", state='disabled')
         self.best_btn.pack(side=tk.LEFT, padx=3)
 
-        self.numbered_btn = tk.Button(op_row, text="批量标记副本",
-                                       command=self._auto_mark_numbered,
+        self.numbered_btn = tk.Button(op_row, text="自动识别副本批量标记删除",
+                                       command=self._auto_mark_copies,
                                        bg='#607D8B', fg='white', font=("微软雅黑", 9),
                                        padx=10, pady=4, cursor="hand2", state='disabled')
         self.numbered_btn.pack(side=tk.LEFT, padx=3)
+
+        self.import_kf_btn = tk.Button(op_row, text="导入关键帧",
+                                        command=self._import_keyframes,
+                                        bg='#455A64', fg='white', font=("微软雅黑", 9),
+                                        padx=10, pady=4, cursor="hand2")
+        self.import_kf_btn.pack(side=tk.LEFT, padx=3)
 
         # ── 进度 + 日志行 ──
         progress_row = tk.Frame(control_frame, bg='#f0f0f0')
@@ -310,6 +316,8 @@ class MediaDeduplicatorGUI:
         except Exception:
             pass
 
+        self.best_btn.config(state='disabled')
+        self.numbered_btn.config(state='disabled')
         self.stop_progress()
         self.clear_results()
 
@@ -543,7 +551,8 @@ class MediaDeduplicatorGUI:
                 files_info = f" ({first_name})"
             else:
                 files_info = ""
-            self.result_listbox.insert(tk.END, f"{idx:3d}. {file_type} {similarity} - {count} 个文件{files_info}")
+            reason = group.get("reason", "")
+            self.result_listbox.insert(tk.END, f"{idx:3d}. {file_type} {similarity} — {reason} — {count} 个文件{files_info}")
 
             # 根据标记删除状态设置颜色
             trashed = group.get("trashed", {})
@@ -618,6 +627,19 @@ class MediaDeduplicatorGUI:
                         parts.append(f"{m}:{s:02d}")
             tk.Label(frame, text="  ".join(parts),
                     font=("微软雅黑", 7), bg=card_bg, fg='#555').pack()
+
+        # 标记删除标签（区分来源）
+        if is_trashed:
+            group = self.groups[self.current_group_index]
+            actions = group.get("auto_actions", {})
+            if file_path in actions.get("keep_best", []):
+                tag_text, tag_color = "低清晰度 — 已标记", "#e65100"
+            elif file_path in actions.get("mark_copies", []):
+                tag_text, tag_color = "副本 — 已标记", "#6A1B9A"
+            else:
+                tag_text, tag_color = "已标记删除", "#c62828"
+            tk.Label(frame, text=tag_text, font=("微软雅黑", 7, "bold"),
+                    bg=card_bg, fg=tag_color).pack()
 
         # 路径
         path_label = tk.Label(frame, text=display_path, font=("微软雅黑", 6),
@@ -745,6 +767,16 @@ class MediaDeduplicatorGUI:
             pass
 
         self._update_trashed(file_path, None)
+        # 清理 auto_actions
+        group_a = self.groups[self.current_group_index]
+        actions = group_a.get("auto_actions", {})
+        for aname, files in list(actions.items()):
+            if file_path in files:
+                files.remove(file_path)
+                if not files:
+                    del actions[aname]
+        if not group_a.get("auto_actions"):
+            group_a.pop("auto_actions", None)
         old_frame.destroy()
         self._rebuild_card()
         self.append_log(f"[已恢复] {os.path.basename(file_path)}")
@@ -810,6 +842,47 @@ class MediaDeduplicatorGUI:
         self.append_log(f"已收集 {len(self.groups)} 组重复")
         self.collect_btn.config(state='disabled')
 
+    def _import_keyframes(self):
+        """导入关键帧 JSON，重新匹配视频"""
+        import json as _json
+        json_path = filedialog.askopenfilename(
+            title="选择关键帧文件",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir="results"
+        )
+        if not json_path:
+            return
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                kf_data = _json.load(f)
+            import imagehash
+            for path, info in kf_data.items():
+                hashes = []
+                for h_str in info["hashes"]:
+                    try:
+                        hashes.append(imagehash.hex_to_hash(h_str))
+                    except Exception:
+                        pass
+                if hashes:
+                    self._deduplicator.video_dedup.video_keyframe_hashes[path] = hashes
+                if info.get("meta"):
+                    self._deduplicator.video_dedup.video_metadata[path] = info["meta"]
+
+            vd = self._deduplicator.video_dedup
+            vd.duplicate_groups.clear()
+            vd.find_identical_videos()
+            vd.find_edited_reencoded_videos()
+            vd._merge_connected_groups()
+
+            self._deduplicator.all_duplicates = self._deduplicator.image_dedup.duplicate_groups + vd.duplicate_groups
+            self._deduplicator._sort_groups()
+            self.groups = self._deduplicator.all_duplicates
+            self.populate_list(self.groups)
+            self.update_status(f"关键帧导入完成: {len(kf_data)} 视频, {len(vd.duplicate_groups)} 组重复")
+            self.append_log(f"已导入关键帧: {len(kf_data)} 视频, 发现 {len(vd.duplicate_groups)} 组视频重复")
+        except Exception as e:
+            messagebox.showerror("导入失败", str(e))
+
     def _find_group_index(self, file_path):
         """找到文件所属的重复组索引"""
         for idx, g in enumerate(self.groups):
@@ -817,24 +890,30 @@ class MediaDeduplicatorGUI:
                 return idx
         return None
 
-    def _batch_mark(self, file_list):
-        """批量标记删除，只刷新一次"""
+    def _batch_mark(self, file_list, action=None):
+        """批量标记删除，记录 auto_actions，只刷新一次"""
         saved_idx = self.current_group_index
         for fp in file_list:
             idx = self._find_group_index(fp)
             if idx is not None:
                 self.current_group_index = idx
                 self._mark_delete(fp, None, rebuild=False)
+                if action:
+                    g = self.groups[idx]
+                    g.setdefault("auto_actions", {}).setdefault(action, []).append(fp)
         self.current_group_index = saved_idx
         self.populate_list(self.groups)
         self._rebuild_card()
         self.append_log(f"[批量] 已标记删除 {len(file_list)} 个文件")
 
     def _auto_keep_best(self):
-        """保留最高清晰度：标记删除组内低清晰度的文件"""
+        """保留最高清晰度：标记删除组内低清晰度的文件（跳过已执行的组）"""
         to_delete = []
         for g in self.groups:
             trashed = g.get("trashed", {})
+            actions = g.get("auto_actions", {})
+            if actions.get("keep_best"):
+                continue
             candidates = [f for f in g["files"] if f not in trashed]
             if len(candidates) <= 1:
                 continue
@@ -878,39 +957,75 @@ class MediaDeduplicatorGUI:
                         to_delete.append(f)
 
         if to_delete:
-            self._batch_mark(to_delete)
+            self._batch_mark(to_delete, "keep_best")
             messagebox.showinfo("完成", f"已标记删除 {len(to_delete)} 个低清晰度文件")
         else:
             messagebox.showinfo("提示", "没有可标记删除的文件")
 
-    def _auto_mark_numbered(self):
-        """批量标记副本：删除名字带(数字)且组内有相同大小的兄弟文件"""
+    def _auto_mark_copies(self):
+        """自动识别副本：图片名字带(数字)+视频时长/大小相同的"""
         import re
         to_delete = []
         numbered_pattern = re.compile(r"^(.*?)\s*\(\d+\)(\.[^.]+)$")
+        from utils import get_video_metadata
+
         for g in self.groups:
+            actions = g.get("auto_actions", {})
+            if actions.get("mark_copies"):
+                continue
             trashed = g.get("trashed", {})
             candidates = [f for f in g["files"] if f not in trashed]
             if len(candidates) <= 1:
                 continue
-            for f in candidates:
-                d, n = os.path.split(f)
-                m = numbered_pattern.match(n)
-                if not m:
-                    continue
-                sibling = os.path.join(d, m.group(1) + m.group(2))
-                if sibling in candidates and sibling != f:
+
+            if "image" in g["type"]:
+                for f in candidates:
+                    d, n = os.path.split(f)
+                    m = numbered_pattern.match(n)
+                    if not m:
+                        continue
+                    sibling = os.path.join(d, m.group(1) + m.group(2))
+                    if sibling in candidates and sibling != f:
+                        try:
+                            if os.path.getsize(f) == os.path.getsize(sibling):
+                                to_delete.append(f)
+                        except OSError:
+                            pass
+
+            elif "video" in g["type"]:
+                metas = {}
+                for f in candidates:
+                    m = get_video_metadata(f)
+                    if m:
+                        metas[f] = m
+                # 按时长+大小分组，相同的标记为副本
+                for i, f1 in enumerate(candidates):
+                    if f1 not in metas:
+                        continue
+                    dur1 = metas[f1].get("duration", 0)
                     try:
-                        if os.path.getsize(f) == os.path.getsize(sibling):
-                            to_delete.append(f)
+                        sz1 = os.path.getsize(f1)
                     except OSError:
-                        pass
+                        continue
+                    for f2 in candidates[i + 1:]:
+                        if f2 not in metas:
+                            continue
+                        if abs(metas[f2].get("duration", 0) - dur1) <= 2:
+                            try:
+                                if abs(os.path.getsize(f2) - sz1) < max(sz1, os.path.getsize(f2)) * 0.05:
+                                    # 保留更短路径的，标记另一个
+                                    if len(f2) < len(f1):
+                                        to_delete.append(f1)
+                                    elif f1 not in to_delete:
+                                        to_delete.append(f2)
+                            except OSError:
+                                pass
 
         if to_delete:
-            self._batch_mark(to_delete)
-            messagebox.showinfo("完成", f"已批量标记 {len(to_delete)} 个副本文件")
+            self._batch_mark(to_delete, "mark_copies")
+            messagebox.showinfo("完成", f"已自动标记 {len(to_delete)} 个副本文件")
         else:
-            messagebox.showinfo("提示", "没有找到可标记的副本文件")
+            messagebox.showinfo("提示", "没有找到可自动标记的副本文件")
 
     def _add_image_thumbnail(self, frame, file_path):
         """加载图片缩略图，返回 (w, h, fmt) 或 None"""
@@ -1039,8 +1154,6 @@ class MediaDeduplicatorGUI:
         self.resume_btn.config(state='disabled')
         self.collect_btn.config(state='disabled')
         self.stop_btn.config(state='disabled')
-        self.best_btn.config(state='disabled')
-        self.numbered_btn.config(state='disabled')
     
     def update_status(self, message):
         """线程安全状态更新：始终通过 after 调度到 UI 线程"""

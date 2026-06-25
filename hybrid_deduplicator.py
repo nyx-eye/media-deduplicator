@@ -159,6 +159,21 @@ class HybridMediaDeduplicator:
                 pass
 
         # ── 阶段5: 报告 ──
+        # 导出关键帧 JSON（供后续导入重匹配）
+        if self.video_dedup.video_keyframe_hashes:
+            try:
+                kf = {}
+                for path, hashes in self.video_dedup.video_keyframe_hashes.items():
+                    kf[path] = {
+                        "hashes": [str(h) for h in hashes],
+                        "meta": self.video_dedup.video_metadata.get(path, {})
+                    }
+                keyframes_path = os.path.join("results", "keyframes.json")
+                with open(keyframes_path, "w", encoding="utf-8") as _f:
+                    _json.dump(kf, _f, ensure_ascii=False)
+            except Exception:
+                pass
+
         if cp:
             cp.save_progress("report", 1, 1)
             cp.cleanup()
@@ -174,10 +189,13 @@ class HybridMediaDeduplicator:
             self.image_dedup.find_duplicates()
             self.all_duplicates.extend(self.image_dedup.duplicate_groups)
 
-        # 视频：如果匹配阶段已完成，加载结果
-        cp = self.checkpoint
-        if cp and cp.is_phase_done("matching"):
-            self.all_duplicates.extend(cp.get_duplicates())
+        # 视频：如果匹配阶段已完成，加载结果（可能跨线程，容错）
+        try:
+            cp = self.checkpoint
+            if cp and cp.is_phase_done("matching"):
+                self.all_duplicates.extend(cp.get_duplicates())
+        except Exception:
+            pass
 
         # 合并已有 JSON 的 trashed 状态
         import json as _json

@@ -35,7 +35,7 @@ DURATION_RATIO_THRESHOLD = 0.3       # 新增：时长比阈值（<0.3 排除候
 ENABLE_DURATION_PREFILTER = True     # 新增：启用时长预过滤
 
 # ============ GPU 加速 ============
-USE_GPU_DECODE = True                # 新增：优先使用 ffmpeg NVDEC 硬件解码
+USE_GPU_DECODE = False               # 关闭 GPU 解码，统一使用 OpenCV 保证匹配精度
 GPU_FRAME_SKIP = 5                   # 新增：GPU 模式下可更密集采样（ffmpeg scene 很快）
 SAVE_KEYFRAMES = False               # 新增：是否保存关键帧到磁盘（仅缩略图模式需要）
 

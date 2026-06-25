@@ -24,7 +24,7 @@ from config import (
     SSIM_THRESHOLD, ABSDIFF_THRESHOLD,
     MIN_SHARED_FRAMES, DURATION_RATIO_THRESHOLD,
     ENABLE_DURATION_PREFILTER,
-    USE_GPU_DECODE, GPU_FRAME_SKIP, SAVE_KEYFRAMES
+    USE_GPU_DECODE, SAVE_KEYFRAMES
 )
 from utils import (
     hamming_distance, get_video_metadata,
@@ -230,7 +230,7 @@ def _extract_with_ffmpeg(video_path):
     import numpy as np
 
     w, h = VIDEO_FRAME_RESIZE
-    skip = GPU_FRAME_SKIP
+    skip = VIDEO_FRAME_SKIP   # 统一采样密度，保证 GPU/CPU 路径关键帧可比
     max_out = min(VIDEO_MAX_FRAMES * 3, 3000)
     frame_bytes = w * h * 3
 

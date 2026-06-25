@@ -17,9 +17,9 @@ DB_PATH = os.path.join(RESULTS_DIR, "checkpoint.db")
 
 class Checkpoint:
     def __init__(self, db_path=DB_PATH):
-        self.conn = sqlite3.connect(db_path)
-        self.conn.execute("PRAGMA journal_mode=WAL")  # WAL 模式，支持并发读写
-        self.conn.execute("PRAGMA synchronous=NORMAL")  # 平衡安全和性能
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()
 
     def _create_tables(self):
