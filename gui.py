@@ -16,6 +16,7 @@ import subprocess
 import json
 from PIL import Image, ImageTk
 import webbrowser
+from lang import get_text
 from hybrid_deduplicator import HybridMediaDeduplicator
 from database import ResultsDatabase
 from utils import get_file_size_mb, is_image, is_video
@@ -40,6 +41,7 @@ class MediaDeduplicatorGUI:
         self.thumbnail_cache = {}
         self.running = False
         self._paused = False
+        self._lang = "zh"
         self.scan_progress = 0
         
         self.create_widgets()
@@ -58,21 +60,24 @@ class MediaDeduplicatorGUI:
         frame_folder = tk.Frame(self.root, bg='#f0f0f0', pady=10)
         frame_folder.pack(fill=tk.X, padx=20)
         
-        tk.Label(frame_folder, text="选择文件夹:", 
-                font=("微软雅黑", 10), bg='#f0f0f0').pack(side=tk.LEFT)
-        
+        self.folder_label = tk.Label(frame_folder, text="选择文件夹:",
+                font=("微软雅黑", 10), bg='#f0f0f0')
+        self.folder_label.pack(side=tk.LEFT)
+
         self.folder_path = tk.StringVar()
-        self.folder_entry = tk.Entry(frame_folder, textvariable=self.folder_path, 
+        self.folder_entry = tk.Entry(frame_folder, textvariable=self.folder_path,
                                       width=50, font=("微软雅黑", 9))
         self.folder_entry.pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(frame_folder, text="浏览...", command=self.select_folder,
-                 bg='#4CAF50', fg='white', font=("微软雅黑", 9), 
-                 padx=10, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(frame_folder, text="导入报告", command=self.load_report,
-                 bg='#FF9800', fg='white', font=("微软雅黑", 9), 
-                 padx=10, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=5)
+
+        self.browse_btn = tk.Button(frame_folder, text="浏览...", command=self.select_folder,
+                 bg='#4CAF50', fg='white', font=("微软雅黑", 9),
+                 padx=10, pady=3, cursor="hand2")
+        self.browse_btn.pack(side=tk.LEFT, padx=5)
+
+        self.import_report_btn = tk.Button(frame_folder, text="导入报告", command=self.load_report,
+                 bg='#FF9800', fg='white', font=("微软雅黑", 9),
+                 padx=10, pady=3, cursor="hand2")
+        self.import_report_btn.pack(side=tk.LEFT, padx=5)
         
         # 控制按钮区域
         control_frame = tk.Frame(self.root, bg='#f0f0f0', pady=8)
@@ -134,6 +139,11 @@ class MediaDeduplicatorGUI:
                                         padx=10, pady=4, cursor="hand2")
         self.import_kf_btn.pack(side=tk.LEFT, padx=3)
 
+        self.lang_btn = tk.Button(op_row, text="EN", command=self._toggle_lang,
+                                   bg='#37474F', fg='white', font=("微软雅黑", 9),
+                                   padx=8, pady=4, cursor="hand2")
+        self.lang_btn.pack(side=tk.RIGHT, padx=3)
+
         # ── 进度 + 日志行 ──
         progress_row = tk.Frame(control_frame, bg='#f0f0f0')
         progress_row.pack(fill=tk.X, pady=4)
@@ -173,7 +183,9 @@ class MediaDeduplicatorGUI:
         # 失败文件列表区
         fail_frame = tk.Frame(self.root, bg='#ffebee', pady=5)
         fail_frame.pack(fill=tk.X, padx=20, pady=3)
-        tk.Label(fail_frame, text="读取失败的文件（双击路径复制）", font=("微软雅黑", 9, "bold"), bg='#ffebee', fg='#c62828').pack()
+        self.fail_label = tk.Label(fail_frame, text="读取失败的文件（双击路径复制）",
+                                    font=("微软雅黑", 9, "bold"), bg='#ffebee', fg='#c62828')
+        self.fail_label.pack()
         self.failed_listbox = tk.Listbox(fail_frame, font=("微软雅黑", 8), height=3, bg="#fff", fg="#b71c1c", selectbackground="#ffccbc")
         self.failed_listbox.pack(fill=tk.X, padx=8)
         def on_copy_fail_file(event):
@@ -193,8 +205,9 @@ class MediaDeduplicatorGUI:
         left_frame = tk.Frame(main_paned, bg='white', relief=tk.RAISED, bd=1)
         main_paned.add(left_frame, width=400)
         
-        tk.Label(left_frame, text="重复文件组列表 (点击查看)", 
-                font=("微软雅黑", 10, "bold"), bg='white', fg='#333').pack(pady=8)
+        self.list_header = tk.Label(left_frame, text="重复文件组列表 (点击查看)",
+                font=("微软雅黑", 10, "bold"), bg='white', fg='#333')
+        self.list_header.pack(pady=8)
         
         list_frame = tk.Frame(left_frame, bg='white')
         list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
@@ -250,8 +263,9 @@ class MediaDeduplicatorGUI:
         tip_frame = tk.Frame(self.root, bg='#fff9c4', pady=4)
         tip_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
-        tk.Label(tip_frame, text="提示: 双击缩略图打开文件 | 右键路径可复制 | 点击'导入报告'直接加载之前的结果", 
-                font=("微软雅黑", 8), bg='#fff9c4', fg='#f57c00').pack()
+        self.tip_label = tk.Label(tip_frame, text="提示: 双击缩略图打开文件 | 右键路径可复制 | 点击'导入报告'直接加载之前的结果",
+                font=("微软雅黑", 8), bg='#fff9c4', fg='#f57c00')
+        self.tip_label.pack()
     
     def append_log(self, msg):
         """线程安全日志：始终通过 after 调度到 UI 线程"""
@@ -455,18 +469,18 @@ class MediaDeduplicatorGUI:
                     remaining = max(0, est_total - total_elapsed)
                     if remaining > 1:
                         if remaining < 60:
-                            eta_str = f"剩余约 {remaining:.0f}秒"
+                            eta_str = get_text(self._lang, "eta_seconds", int(remaining))
                         else:
                             m = int(remaining // 60)
                             s = int(remaining % 60)
-                            eta_str = f"剩余约 {m}分{s:02d}秒"
+                            eta_str = get_text(self._lang, "eta_minutes", m, s)
 
                 phase_labels = {
-                    'scan':           '正在扫描文件...',
-                    'images':         '正在处理图片哈希...',
-                    'videos_extract': '正在提取视频关键帧...',
-                    'videos_match':   '正在匹配重复视频...',
-                    'report':         '正在生成报告...',
+                    'scan':           get_text(self._lang, "scanning"),
+                    'images':         get_text(self._lang, "processing_images"),
+                    'videos_extract': get_text(self._lang, "extracting_keyframes"),
+                    'videos_match':   get_text(self._lang, "matching"),
+                    'report':         get_text(self._lang, "generating_report"),
                 }
                 label = phase_labels.get(phase, phase)
                 self.update_progress(pct, f"{label} ({current}/{total})", eta_str)
@@ -547,17 +561,20 @@ class MediaDeduplicatorGUI:
         self.result_listbox.delete(0, tk.END)
         self.groups = groups
 
+        t = lambda k, *a: get_text(self._lang, k, *a)
+
         for idx, group in enumerate(groups, 1):
-            file_type = "[图片]" if group['type'] == 'image' else "[视频]"
-            count = group['count']
-            similarity = group['similarity']
-            if group['files']:
-                first_name = os.path.basename(group['files'][0])
+            ft = t("file_type_image") if "image" in group["type"] else t("file_type_video")
+            count = group["count"]
+            similarity = group["similarity"]
+            if group["files"]:
+                first_name = os.path.basename(group["files"][0])
                 files_info = f" ({first_name})"
             else:
                 files_info = ""
-            reason = group.get("reason", "")
-            self.result_listbox.insert(tk.END, f"{idx:3d}. {file_type} {similarity} — {reason} — {count} 个文件{files_info}")
+            reason = t("reason_" + group.get("reason", ""), group.get("reason", ""))
+            fu = t("files_unit")
+            self.result_listbox.insert(tk.END, f"{idx:3d}. {ft} {similarity} — {reason} — {count}{fu}{files_info}")
 
             # 根据标记删除状态设置颜色
             trashed = group.get("trashed", {})
@@ -638,11 +655,14 @@ class MediaDeduplicatorGUI:
             group = self.groups[self.current_group_index]
             actions = group.get("auto_actions", {})
             if file_path in actions.get("keep_best", []):
-                tag_text, tag_color = "低清晰度 — 已标记", "#e65100"
+                tag_text = get_text(self._lang, "tag_keep_best")
+                tag_color = "#e65100"
             elif file_path in actions.get("mark_copies", []):
-                tag_text, tag_color = "副本 — 已标记", "#6A1B9A"
+                tag_text = get_text(self._lang, "tag_mark_copies")
+                tag_color = "#6A1B9A"
             else:
-                tag_text, tag_color = "已标记删除", "#c62828"
+                tag_text = get_text(self._lang, "tag_manual")
+                tag_color = "#c62828"
             tk.Label(frame, text=tag_text, font=("微软雅黑", 7, "bold"),
                     bg=card_bg, fg=tag_color).pack()
 
@@ -659,23 +679,24 @@ class MediaDeduplicatorGUI:
         btn_frame = tk.Frame(frame, bg=card_bg)
         btn_frame.pack(pady=5)
 
-        tk.Button(btn_frame, text="打开",
+        lt = lambda k: get_text(self._lang, k)
+        tk.Button(btn_frame, text=lt("open"),
                   command=lambda p=display_path: self.open_file(p),
                   bg='#2196F3', fg='white', font=("微软雅黑", 7),
                   padx=8, pady=2, cursor="hand2", width=6).pack(side=tk.LEFT, padx=2)
 
-        tk.Button(btn_frame, text="打开文件夹",
+        tk.Button(btn_frame, text=lt("open_folder"),
                   command=lambda p=display_path: self.open_folder(p),
                   bg='#FF9800', fg='white', font=("微软雅黑", 7),
                   padx=8, pady=2, cursor="hand2", width=8).pack(side=tk.LEFT, padx=2)
 
         if is_trashed:
-            tk.Button(btn_frame, text="恢复",
+            tk.Button(btn_frame, text=lt("restore"),
                       command=lambda fp=file_path: self._restore_file(fp, frame),
                       bg='#4CAF50', fg='white', font=("微软雅黑", 7),
                       padx=6, pady=2, cursor="hand2", width=6).pack(side=tk.LEFT, padx=2)
         else:
-            tk.Button(btn_frame, text="标记删除",
+            tk.Button(btn_frame, text=lt("mark_delete"),
                       command=lambda fp=file_path, fr=frame: self._mark_delete(fp, fr),
                       bg='#f44336', fg='white', font=("微软雅黑", 7),
                       padx=6, pady=2, cursor="hand2", width=6).pack(side=tk.LEFT, padx=2)
@@ -869,9 +890,11 @@ class MediaDeduplicatorGUI:
             import json as _json
             with open(dest, "r", encoding="utf-8") as f:
                 kf = _json.load(f)
-            self.update_status(f"已加载 {len(kf)} 个视频的关键帧缓存")
-            self.append_log(f"已加载关键帧缓存: {len(kf)} 个视频（将在扫描时跳过未变化的文件）")
-            self.import_kf_btn.config(text="取消导入", command=self._cancel_keyframes,
+            n = len(kf)
+            self.update_status(get_text(self._lang, "kf_loaded", n))
+            self.append_log(get_text(self._lang, "kf_log", n))
+            self.import_kf_btn.config(text=get_text(self._lang, "cancel_import"),
+                                       command=self._cancel_keyframes,
                                        bg='#c62828', fg='white')
         except Exception as e:
             messagebox.showerror("导入失败", str(e))
@@ -881,10 +904,50 @@ class MediaDeduplicatorGUI:
         cache_path = os.path.join("results", "keyframes.json")
         if os.path.exists(cache_path):
             os.remove(cache_path)
-        self.update_status("已取消关键帧缓存")
-        self.append_log("已取消关键帧缓存，扫描时将重新提取所有视频")
-        self.import_kf_btn.config(text="导入关键帧缓存", command=self._import_keyframes,
+        self.update_status(get_text(self._lang, "kf_cancelled"))
+        self.append_log(get_text(self._lang, "kf_cancel_log"))
+        self.import_kf_btn.config(text=get_text(self._lang, "import_kf"),
+                                   command=self._import_keyframes,
                                    bg='#455A64', fg='white')
+
+    def _toggle_lang(self):
+        self._lang = "en" if self._lang == "zh" else "zh"
+        try:
+            self._refresh_ui_texts()
+        except Exception as e:
+            self.append_log(f"Lang error: {e}")
+
+    def _refresh_ui_texts(self):
+        t = lambda k, *a: get_text(self._lang, k, *a)
+        self.root.title(t("title"))
+        self.lang_btn.config(text=t("lang_btn"))
+        self.folder_label.config(text=t("select_folder"))
+        self.browse_btn.config(text=t("browse"))
+        self.import_report_btn.config(text=t("import_report"))
+        self.fail_label.config(text=t("failed_bar"))
+        self.list_header.config(text=t("list_bar"))
+        self.tip_label.config(text=t("tip"))
+        self.start_btn.config(text=t("start"))
+        self.pause_btn.config(text=t("pause"))
+        self.resume_btn.config(text=t("resume"))
+        self.stop_btn.config(text=t("stop"))
+        self.collect_btn.config(text=t("collect"))
+        self.best_btn.config(text=t("keep_best"))
+        self.numbered_btn.config(text=t("mark_copies"))
+
+        cache_path = os.path.join("results", "keyframes.json")
+        if os.path.exists(cache_path):
+            self.import_kf_btn.config(text=t("cancel_import"))
+        else:
+            self.import_kf_btn.config(text=t("import_kf"))
+
+        self.status_label.config(text=t("ready"))
+        # 刷新列表和缩略图卡片（它们包含语言相关的文本）
+        if self.groups:
+            self.populate_list(self.groups)
+            if self.current_group_index < len(self.groups):
+                self._rebuild_card()
+        self.root.update_idletasks()
 
     def _find_group_index(self, file_path):
         """找到文件所属的重复组索引"""
