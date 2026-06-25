@@ -1,7 +1,18 @@
 # Media Deduplicator v1.1
 
-图片/视频去重工具，适配 TB 级媒体库。
-Image/video deduplication tool for TB-scale media libraries.
+图片/视频去重工具，适配 TB 级媒体库。识别以下重复类型：
+
+**图片 / Images**：内容完全相同的图片（pHash 指纹一致），按文件大小分组预筛。
+
+**视频 / Videos**：
+- 完全相同 / Identical — 关键帧序列 ≥95% 一致
+- 压缩/重编码 / Compressed — 不同分辨率或编码器，内容相同
+- 轻度剪辑 / Light Edit — 部分片段被裁剪
+- 剪辑+压缩 / Edited+Compressed — 裁剪且重新编码
+- 跨分辨率压缩 / Cross-Resolution — 极端压缩导致关键帧偏移较大（精确共享 ≥20 帧 + 时长比 ≥80%）
+- 连通分量合并 — 3 个以上相似视频自动归入同一组
+
+Image/video deduplication tool for TB-scale libraries. Detects: identical images (pHash), identical/re-encoded/edited/cross-resolution videos with connected component merging.
 
 ## 安装 / Install
 
