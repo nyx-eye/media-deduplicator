@@ -1,69 +1,71 @@
 # Media Deduplicator v1.1
 
 图片/视频去重工具，适配 TB 级媒体库。
+Image/video deduplication tool for TB-scale media libraries.
 
-## 安装
+## 安装 / Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 使用
+## 使用 / Usage
 
 ```bash
 python gui.py
 ```
 
-## 界面说明
+## 界面说明 / Interface
 
-### 按钮
+### 按钮 / Buttons
 
-| 按钮 | 说明 |
-|------|------|
-| 开始扫描去重 | 选择文件夹后开始处理 |
-| 暂停 | 暂停当前任务 |
-| 继续 | 从断点恢复 |
-| 停止 | 完全停止并清空断点 |
-| 收集结果 | 暂停后显示已发现的重复组 |
-| 保留最高清晰度 | 自动标记删除组内低分辨率文件（视频排除剪辑版），已执行过的组跳过 |
-| 自动识别副本批量标记删除 | 自动标记 `名称(数字).后缀` 且大小相同的图片副本，以及时长/大小相同的视频副本 |
-| 导入关键帧缓存 | 导入上次扫描的 `keyframes.json`，跳过未变化的视频提取 |
-| 导入报告 | 加载已保存的 `duplicates.json` |
+| 按钮 Button | 说明 Description |
+|-------------|-----------------|
+| 开始扫描去重 / Start Scan | 选择文件夹后开始处理 |
+| 暂停 / Pause | 暂停当前任务 |
+| 继续 / Resume | 从断点恢复 |
+| 停止 / Stop | 完全停止并清空断点 |
+| 收集结果 / Collect Results | 暂停后显示已发现的重复组 |
+| 保留最高清晰度 / Keep Best Quality | 自动标记删除组内低分辨率文件（视频排除剪辑版） |
+| 自动识别副本批量标记删除 / Auto Mark Duplicates | 自动标记副本文件 |
+| 导入关键帧缓存 / Import Keyframe Cache | 导入上次扫描的缓存，跳过未变化视频 |
+| 导入报告 / Import Report | 加载已保存的 `duplicates.json` |
 
-### 重复组列表
+### 重复组列表 / Group List
 
-- 选中组 → 右侧显示缩略图
-- **橙色**：组内有文件已标记删除
-- **绿色**：组内仅剩一个未标记文件
+- 选中组 → 右侧显示缩略图 / Select group → thumbnails on right
+- **橙色/Orange**：组内有文件已标记删除 / some files marked
+- **绿色/Green**：组内仅剩一个未标记文件 / only one file remains
 
-### 缩略图卡片
+### 缩略图卡片 / Thumbnail Cards
 
 - 显示分辨率、格式（图片）/ 帧率、时长（视频）
-- **[打开]**：用默认程序打开文件
-- **[打开文件夹]**：在资源管理器中定位文件
-- **[标记删除]**：移动文件到 `扫描目录/delete/`，重命名为 `原名(delete).后缀`
-- **[恢复]**：将标记删除的文件移回原位
-- **红底卡片**：已标记删除
-- 标签区分来源：橙色「低清晰度」/ 紫色「副本」/ 红色「已标记删除」
-- 滚轮横向浏览
+  Shows resolution, format (image) / fps, duration (video)
+- **[打开/Open]**：用默认程序打开文件
+- **[打开文件夹/Open Folder]**：在资源管理器中定位文件
+- **[标记删除/Mark Delete]**：移到 `扫描目录/delete/`，`原名(delete).后缀`
+- **[恢复/Restore]**：将标记删除的文件移回原位
+- **红底卡片/Red background**：已标记删除 / marked for deletion
+- 标签区分来源 / Tags: 橙色「低清晰度」/ 紫色「副本」/ 红色「已标记删除」
+- 滚轮横向浏览 / Mouse wheel to scroll horizontally
 
-### 快捷操作
+### 快捷操作 / Shortcuts
 
-- **右键路径**：复制文件路径
-- **双击缩略图/路径**：打开文件
+- **右键路径 / Right-click path**：复制文件路径 / copy path
+- **双击缩略图/路径 / Double-click**：打开文件 / open file
 
-## 配置
+## 配置 / Config
 
-编辑 `config.py` 调整参数：
+编辑 `config.py`：
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `VIDEO_FRAME_SKIP` | 10 | 帧采样间隔 |
+| 参数 Parameter | 默认值 Default | 说明 Description |
+|---------------|---------------|-----------------|
+| `VIDEO_FRAME_SKIP` | 10 | 帧采样间隔 / frame sampling interval |
 | `VIDEO_SIMILARITY_THRESHOLD` | 60 | 视频序列相似度阈值 % |
 | `SSIM_THRESHOLD` | 0.55 | 场景切换结构相似度阈值 |
-| `MIN_SHARED_FRAMES` | 5 | 匹配候选最少共享帧数 |
+| `MIN_SHARED_FRAMES` | 5 | 匹配候选最少共享帧数 / min shared frames |
 
-## 输出
+## 输出 / Output
 
-- `results/duplicates.json`：重复组结果（含标记删除状态）
-- `results/keyframes.json`：视频关键帧缓存（用于二次扫描加速）
+- `results/duplicates.json` — 重复组结果 / duplicate groups (含标记删除状态)
+- `results/keyframes.json` — 视频关键帧缓存 / keyframe cache (二次扫描加速)
